@@ -1,0 +1,8 @@
+{
+  "name": "ADS Chaophraya",
+  "description": "แพลตฟอร์มระดับพรีเมียมสำหรับสำรวจและจองพื้นที่โฆษณานอกบ้านบนระบบขนส่งทางน้ำ ท่าเรือ และจอดิจิทัล",
+  "requestFramePermissions": [
+    "geolocation",
+    "camera"
+  ]
+}
