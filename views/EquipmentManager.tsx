@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
-  Equipment, EquipmentStatus, EquipmentType
+  Equipment, EquipmentStatus, EquipmentType, SimCard, SimCardStatus
 } from '../types';
 import {
   Search, Plus, AlertTriangle, CheckCircle, Clock, Wrench, XCircle,
   Filter, FileText, Image as ImageIcon, Calendar, MapPin, Save, Trash2, Edit, Upload, X,
-  LayoutGrid, List, Folder, Map, ArrowRight, FolderOpen, Power, Loader2, ScanLine, QrCode, Download, Crosshair
+  LayoutGrid, List, Folder, Map, ArrowRight, FolderOpen, Power, Loader2, ScanLine, QrCode, Download, Crosshair, Smartphone, Package
 } from 'lucide-react';
 import { equipmentService } from '../services/equipmentService';
+import { simCardService, getSimStatusLabel, getSimStatusColor } from '../services/simCardService';
 
 declare global {
   interface Window {
@@ -36,6 +37,8 @@ const EQUIPMENT_TYPE_LABELS: Record<EquipmentType, string> = {
   [EquipmentType.HDMI_CABLE]: 'สาย HDMI 5-30 เมตร',
   [EquipmentType.LAN_CABLE]: 'สาย LAN 5-30 เมตร',
   [EquipmentType.POWER_CABLE]: 'สายไฟ',
+  [EquipmentType.ROUTER_4G]: 'Router 4G',
+  [EquipmentType.SIM_AIS]: 'SIM AIS',
   [EquipmentType.OTHER]: 'อื่นๆ'
 };
 
@@ -123,6 +126,85 @@ export const EquipmentManager: React.FC<EquipmentManagerProps> = ({
   // Form State
   const [formData, setFormData] = useState<Partial<Equipment>>({});
 
+  // SIM Card States
+  const [simCards, setSimCards] = useState<SimCard[]>([]);
+  const [isSimLoading, setIsSimLoading] = useState(false);
+  const [showSimModal, setShowSimModal] = useState(false);
+  const [editingSim, setEditingSim] = useState<SimCard | null>(null);
+  const [simFormData, setSimFormData] = useState<Partial<SimCard>>({
+    phoneNumber: '',
+    status: 'ACTIVE',
+    location: '',
+    notes: ''
+  });
+  const [showSimSection, setShowSimSection] = useState(false);
+
+  // Load SIM Cards
+  useEffect(() => {
+    const loadSimCards = async () => {
+      setIsSimLoading(true);
+      try {
+        const data = await simCardService.getAll();
+        setSimCards(data);
+      } catch (error) {
+        console.error('Failed to load SIM cards:', error);
+      } finally {
+        setIsSimLoading(false);
+      }
+    };
+    loadSimCards();
+  }, []);
+
+  // SIM Card Handlers
+  const handleAddSim = () => {
+    setEditingSim(null);
+    setSimFormData({ phoneNumber: '', status: 'ACTIVE', location: '', notes: '' });
+    setShowSimModal(true);
+  };
+
+  const handleEditSim = (sim: SimCard) => {
+    setEditingSim(sim);
+    setSimFormData({ ...sim });
+    setShowSimModal(true);
+  };
+
+  const handleSaveSim = async () => {
+    if (!simFormData.phoneNumber) {
+      alert('กรุณากรอกเบอร์โทรศัพท์');
+      return;
+    }
+
+    setIsSimLoading(true);
+    try {
+      if (editingSim) {
+        const updated = await simCardService.update({ ...editingSim, ...simFormData } as SimCard);
+        setSimCards(prev => prev.map(s => s.id === updated.id ? updated : s));
+      } else {
+        const created = await simCardService.create(simFormData as Omit<SimCard, 'id' | 'createdAt' | 'updatedAt'>);
+        setSimCards(prev => [...prev, created]);
+      }
+      setShowSimModal(false);
+    } catch (error) {
+      alert('เกิดข้อผิดพลาดในการบันทึก');
+    } finally {
+      setIsSimLoading(false);
+    }
+  };
+
+  const handleDeleteSim = async (id: string) => {
+    if (!confirm('ต้องการลบ SIM นี้หรือไม่?')) return;
+
+    setIsSimLoading(true);
+    try {
+      await simCardService.delete(id);
+      setSimCards(prev => prev.filter(s => s.id !== id));
+    } catch (error) {
+      alert('เกิดข้อผิดพลาดในการลบ');
+    } finally {
+      setIsSimLoading(false);
+    }
+  };
+
   // Warranty Check Logic
   const checkWarranty = (expireDate: string) => {
     const today = new Date();
@@ -136,6 +218,8 @@ export const EquipmentManager: React.FC<EquipmentManagerProps> = ({
   };
 
   // Stats
+  const [showStockStats, setShowStockStats] = useState(false);
+
   const stats = useMemo(() => {
     const total = equipmentList.length;
     const warning = equipmentList.filter(e => {
@@ -147,6 +231,21 @@ export const EquipmentManager: React.FC<EquipmentManagerProps> = ({
     const waiting = equipmentList.filter(e => e.status === EquipmentStatus.WAITING_PURCHASE).length;
 
     return { total, warning, repair, broken, waiting };
+  }, [equipmentList]);
+
+  const stockStats = useMemo(() => {
+    const counts: Record<string, number> = {};
+    Object.values(EquipmentType).forEach(type => {
+      counts[type] = 0;
+    });
+
+    equipmentList.forEach(item => {
+      if (counts[item.type] !== undefined) {
+        counts[item.type]++;
+      }
+    });
+
+    return counts;
   }, [equipmentList]);
 
   // Grouping by Folder (Location) - includes empty folders
@@ -569,11 +668,17 @@ export const EquipmentManager: React.FC<EquipmentManagerProps> = ({
             </h1>
             <p className="text-slate-500 mt-1">จัดการสต๊อก แจ้งเตือนประกัน และสถานะการซ่อมบำรุง</p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap">
+            <button onClick={() => setShowStockStats(!showStockStats)} className={`${showStockStats ? 'bg-blue-600 hover:bg-blue-700' : 'bg-slate-700 hover:bg-slate-600'} text-white px-4 py-3 rounded-xl font-bold flex items-center gap-2 shadow-lg transition-all active:scale-95`}>
+              <Package size={20} /> สรุปสต๊อก
+            </button>
+            <button onClick={() => setShowSimSection(!showSimSection)} className={`${showSimSection ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-slate-700 hover:bg-slate-600'} text-white px-4 py-3 rounded-xl font-bold flex items-center gap-2 shadow-lg transition-all active:scale-95`}>
+              <Smartphone size={20} /> จัดการ SIM ({simCards.length})
+            </button>
             <button onClick={startScanning} className="bg-slate-900 hover:bg-slate-800 text-white px-4 py-3 rounded-xl font-bold flex items-center gap-2 shadow-lg transition-all active:scale-95">
               <ScanLine size={20} /> สแกน QR
             </button>
-            <button onClick={handleAddNew} className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 shadow-lg shadow-indigo-200 transition-all active:scale-95">
+            <button onClick={() => handleAddNew()} className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 shadow-lg shadow-indigo-200 transition-all active:scale-95">
               <Plus size={20} /> เพิ่มอุปกรณ์ใหม่
             </button>
           </div>
@@ -586,6 +691,180 @@ export const EquipmentManager: React.FC<EquipmentManagerProps> = ({
           <StatCard label="ชำรุด/เสียหาย" value={stats.broken} icon={XCircle} color="bg-red-50 border-red-100" textColor="text-red-600" />
           <StatCard label="รอจัดซื้อ" value={stats.waiting} icon={Clock} color="bg-purple-50 border-purple-100" textColor="text-purple-600" />
         </div>
+
+        {/* Stock Summary Section */}
+        {showStockStats && (
+          <div className="bg-white rounded-2xl border border-blue-200 shadow-sm overflow-hidden animate-fadeIn">
+            <div className="p-4 bg-blue-50 border-b border-blue-100 flex justify-between items-center">
+              <div className="flex items-center gap-3">
+                <Package className="text-blue-600" size={24} />
+                <div>
+                  <h2 className="font-bold text-slate-900">สรุปจำนวนสต๊อกอุปกรณ์</h2>
+                  <p className="text-xs text-slate-500">แยกตามประเภทอุปกรณ์</p>
+                </div>
+              </div>
+            </div>
+            <div className="p-6">
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                {Object.values(EquipmentType).map(type => (
+                  <div key={type} className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-100">
+                    <span className="text-sm font-medium text-slate-600 truncate mr-2" title={EQUIPMENT_TYPE_LABELS[type]}>
+                      {EQUIPMENT_TYPE_LABELS[type]}
+                    </span>
+                    <span className="text-lg font-black text-slate-900 bg-white px-3 py-1 rounded-lg shadow-sm min-w-[3rem] text-center">
+                      {stockStats[type]}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* SIM Registration Section */}
+        {showSimSection && (
+          <div className="bg-white rounded-2xl border border-emerald-200 shadow-sm overflow-hidden animate-fadeIn">
+            <div className="p-4 bg-emerald-50 border-b border-emerald-100 flex justify-between items-center">
+              <div className="flex items-center gap-3">
+                <Smartphone className="text-emerald-600" size={24} />
+                <div>
+                  <h2 className="font-bold text-slate-900">ระบบลงทะเบียน SIM</h2>
+                  <p className="text-xs text-slate-500">จัดการ SIM Card ทั้งหมด ({simCards.length} รายการ)</p>
+                </div>
+              </div>
+              <button
+                onClick={handleAddSim}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 shadow-lg transition-all"
+              >
+                <Plus size={18} /> เพิ่ม SIM ใหม่
+              </button>
+            </div>
+
+            {isSimLoading ? (
+              <div className="p-8 flex items-center justify-center">
+                <Loader2 className="animate-spin text-emerald-600" size={32} />
+              </div>
+            ) : simCards.length === 0 ? (
+              <div className="p-8 text-center text-slate-400">
+                <Smartphone size={48} className="mx-auto mb-4 opacity-50" />
+                <p className="font-bold">ยังไม่มี SIM ในระบบ</p>
+                <p className="text-sm">กดปุ่ม "เพิ่ม SIM ใหม่" เพื่อเริ่มต้น</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 border-b border-slate-100">
+                    <tr>
+                      <th className="text-left p-4 font-bold text-slate-700">เบอร์โทรศัพท์</th>
+                      <th className="text-left p-4 font-bold text-slate-700">สถานะ</th>
+                      <th className="text-left p-4 font-bold text-slate-700">สถานที่</th>
+                      <th className="text-left p-4 font-bold text-slate-700">หมายเหตุ</th>
+                      <th className="text-center p-4 font-bold text-slate-700">จัดการ</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {simCards.map(sim => (
+                      <tr key={sim.id} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
+                        <td className="p-4 font-mono font-bold text-slate-900">{sim.phoneNumber}</td>
+                        <td className="p-4">
+                          <span className={`px-3 py-1 rounded-full text-xs font-bold ${getSimStatusColor(sim.status)}`}>
+                            {getSimStatusLabel(sim.status)}
+                          </span>
+                        </td>
+                        <td className="p-4 text-slate-600">{sim.location || '-'}</td>
+                        <td className="p-4 text-slate-500 truncate max-w-[200px]">{sim.notes || '-'}</td>
+                        <td className="p-4 text-center">
+                          <div className="flex items-center justify-center gap-2">
+                            <button onClick={() => handleEditSim(sim)} className="p-2 hover:bg-indigo-50 text-indigo-600 rounded-lg transition-colors" title="แก้ไข">
+                              <Edit size={16} />
+                            </button>
+                            <button onClick={() => handleDeleteSim(sim.id)} className="p-2 hover:bg-red-50 text-red-500 rounded-lg transition-colors" title="ลบ">
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* SIM Modal */}
+        {showSimModal && (
+          <div className="fixed inset-0 z-[5000] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md p-6 animate-slideUp">
+              <div className="flex justify-between items-center mb-6">
+                <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
+                  <Smartphone className="text-emerald-600" size={24} />
+                  {editingSim ? 'แก้ไข SIM' : 'เพิ่ม SIM ใหม่'}
+                </h2>
+                <button onClick={() => setShowSimModal(false)} className="p-2 hover:bg-slate-100 rounded-full text-slate-400">
+                  <X size={24} />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-900 uppercase">เบอร์โทรศัพท์ *</label>
+                  <input
+                    type="text"
+                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-emerald-500 text-slate-900 font-mono font-medium"
+                    placeholder="เช่น 08X-XXX-XXXX"
+                    value={simFormData.phoneNumber || ''}
+                    onChange={e => setSimFormData({ ...simFormData, phoneNumber: e.target.value })}
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-900 uppercase">สถานะ</label>
+                  <select
+                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-emerald-500 text-slate-900 font-medium"
+                    value={simFormData.status || 'ACTIVE'}
+                    onChange={e => setSimFormData({ ...simFormData, status: e.target.value as SimCardStatus })}
+                  >
+                    <option value="ACTIVE">ใช้งาน</option>
+                    <option value="BROKEN">ชำรุด</option>
+                    <option value="LOST">สูญหาย</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-900 uppercase">สถานที่</label>
+                  <input
+                    type="text"
+                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-emerald-500 text-slate-900 font-medium"
+                    placeholder="เช่น ติดตั้งที่ท่าเรือสาทร"
+                    value={simFormData.location || ''}
+                    onChange={e => setSimFormData({ ...simFormData, location: e.target.value })}
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-900 uppercase">หมายเหตุ</label>
+                  <textarea
+                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-emerald-500 text-slate-900 font-medium h-24"
+                    placeholder="รายละเอียดเพิ่มเติม..."
+                    value={simFormData.notes || ''}
+                    onChange={e => setSimFormData({ ...simFormData, notes: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-3 mt-6">
+                <button onClick={() => setShowSimModal(false)} className="px-6 py-3 text-slate-500 font-bold hover:bg-slate-100 rounded-xl transition-colors">
+                  ยกเลิก
+                </button>
+                <button onClick={handleSaveSim} disabled={isSimLoading} className="px-8 py-3 bg-emerald-600 text-white font-bold rounded-xl shadow-lg hover:bg-emerald-700 transition-colors flex items-center gap-2 disabled:opacity-50">
+                  {isSimLoading ? <Loader2 className="animate-spin" size={18} /> : <Save size={18} />}
+                  บันทึก
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex flex-col md:flex-row gap-4 items-center justify-between">
           <div className="flex flex-col md:flex-row gap-4 flex-grow w-full">
@@ -796,7 +1075,14 @@ export const EquipmentManager: React.FC<EquipmentManagerProps> = ({
                             </button>
                           ) : null}
                         </div>
-                        <div className="flex items-center gap-2"><Calendar size={14} /> <span>หมดประกัน: {new Date(item.warrantyExpireDate).toLocaleDateString('th-TH')}</span></div>
+                        <div className="flex items-center gap-2">
+                          <Clock size={14} />
+                          {item.noWarranty ? (
+                            <span className="text-amber-600 font-bold">ไม่มีประกัน</span>
+                          ) : (
+                            <span>ติดตั้ง: {item.installationDate ? new Date(item.installationDate).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' }) : '-'}</span>
+                          )}
+                        </div>
                       </div>
 
                       {/* Warranty Card Logic */}
@@ -881,11 +1167,17 @@ export const EquipmentManager: React.FC<EquipmentManagerProps> = ({
                             <span className={`px-2 py-1 rounded-md text-[10px] font-bold border ${STATUS_CONFIG[item.status].color}`}>
                               {STATUS_CONFIG[item.status].label}
                             </span>
-                            {warranty.status !== 'OK' && (
-                              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold w-fit ${warranty.status === 'EXPIRED' ? 'bg-red-500 text-white' : 'bg-amber-100 text-amber-700 border border-amber-200'}`}>
-                                <AlertTriangle size={10} />
-                                {warranty.status === 'EXPIRED' ? `หมด (${warranty.days} วัน)` : `เหลือ ${warranty.days} วัน`}
+                            {item.noWarranty ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold w-fit bg-amber-100 text-amber-700 border border-amber-200">
+                                <AlertTriangle size={10} /> ไม่มีประกัน
                               </span>
+                            ) : (
+                              warranty.status !== 'OK' && (
+                                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold w-fit ${warranty.status === 'EXPIRED' ? 'bg-red-500 text-white' : 'bg-amber-100 text-amber-700 border border-amber-200'}`}>
+                                  <AlertTriangle size={10} />
+                                  {warranty.status === 'EXPIRED' ? `หมด (${warranty.days} วัน)` : `เหลือ ${warranty.days} วัน`}
+                                </span>
+                              )
                             )}
                           </div>
                         </td>
@@ -1023,9 +1315,33 @@ export const EquipmentManager: React.FC<EquipmentManagerProps> = ({
                     <label className="text-xs font-bold text-slate-900 uppercase">วันที่ซื้อ</label>
                     <input type="date" className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-indigo-500 text-slate-900 font-medium" value={formData.purchaseDate} onChange={e => setFormData({ ...formData, purchaseDate: e.target.value })} />
                   </div>
+
                   <div className="space-y-1.5">
-                    <label className="text-xs font-bold text-slate-900 uppercase">วันหมดประกัน</label>
-                    <input type="date" className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-indigo-500 text-slate-900 font-medium" value={formData.warrantyExpireDate} onChange={e => setFormData({ ...formData, warrantyExpireDate: e.target.value })} />
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-bold text-slate-900 uppercase">วันหมดประกัน</label>
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={formData.noWarranty || false}
+                          onChange={e => setFormData({ ...formData, noWarranty: e.target.checked })}
+                          className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                        />
+                        <span className="text-xs font-bold text-slate-500">ไม่มีประกัน</span>
+                      </label>
+                    </div>
+                    {!formData.noWarranty && (
+                      <input type="date" className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-indigo-500 text-slate-900 font-medium" value={formData.warrantyExpireDate} onChange={e => setFormData({ ...formData, warrantyExpireDate: e.target.value })} />
+                    )}
+                    {formData.noWarranty && (
+                      <div className="p-3 bg-amber-50 border border-amber-100 rounded-xl text-amber-700 text-sm font-bold">
+                        ⚠️ สินค้านี้ไม่มีประกัน
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-slate-900 uppercase">วันที่ติดตั้ง</label>
+                    <input type="date" className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-indigo-500 text-slate-900 font-medium" value={formData.installationDate || ''} onChange={e => setFormData({ ...formData, installationDate: e.target.value })} />
                   </div>
 
                   <div className="md:col-span-2 space-y-1.5">
@@ -1157,12 +1473,18 @@ export const EquipmentManager: React.FC<EquipmentManagerProps> = ({
             <div className="bg-white p-4 rounded-2xl border-2 border-slate-100 shadow-sm mb-6">
               <img
                 src={`https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(
-                  (() => {
-                    const w = checkWarranty(qrModalItem.warrantyExpireDate);
-                    if (w.status === 'EXPIRED') return `หมดประกันแล้ว ${w.days} วัน`;
-                    if (w.status === 'WARNING') return `เหลือประกัน ${w.days} วัน`;
-                    return `ประกันยังไม่หมด (หมด ${new Date(qrModalItem.warrantyExpireDate).toLocaleDateString('th-TH')})`;
-                  })()
+                  JSON.stringify({
+                    id: qrModalItem.id,
+                    name: qrModalItem.name,
+                    serial: qrModalItem.serialNumber,
+                    type: EQUIPMENT_TYPE_LABELS[qrModalItem.type],
+                    status: STATUS_CONFIG[qrModalItem.status]?.label,
+                    purchaseDate: qrModalItem.purchaseDate,
+                    warrantyExpire: qrModalItem.noWarranty ? 'ไม่มีประกัน' : qrModalItem.warrantyExpireDate,
+                    installationDate: qrModalItem.installationDate || '-',
+                    location: qrModalItem.location || '-',
+                    notes: qrModalItem.notes || '-'
+                  })
                 )}`}
                 alt="QR Code"
                 className="w-48 h-48"
@@ -1179,10 +1501,32 @@ export const EquipmentManager: React.FC<EquipmentManagerProps> = ({
                 <span className="font-mono font-bold text-slate-900">{qrModalItem.serialNumber}</span>
               </div>
               <div className="flex justify-between text-sm border-b border-slate-100 pb-2">
-                <span className="text-slate-500">วันหมดประกัน</span>
-                <span className="font-bold text-slate-900">{new Date(qrModalItem.warrantyExpireDate).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
+                <span className="text-slate-500">ประเภท</span>
+                <span className="font-bold text-slate-900">{EQUIPMENT_TYPE_LABELS[qrModalItem.type]}</span>
               </div>
-              {(() => {
+              <div className="flex justify-between text-sm border-b border-slate-100 pb-2">
+                <span className="text-slate-500">วันที่ซื้อ</span>
+                <span className="font-bold text-slate-900">{new Date(qrModalItem.purchaseDate).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
+              </div>
+              <div className="flex justify-between text-sm border-b border-slate-100 pb-2">
+                <span className="text-slate-500">วันที่ติดตั้ง</span>
+                <span className="font-bold text-slate-900">{qrModalItem.installationDate ? new Date(qrModalItem.installationDate).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' }) : '-'}</span>
+              </div>
+              <div className="flex justify-between text-sm border-b border-slate-100 pb-2">
+                <span className="text-slate-500">สถานที่</span>
+                <span className="font-bold text-slate-900">{qrModalItem.location || '-'}</span>
+              </div>
+              <div className="flex justify-between text-sm border-b border-slate-100 pb-2">
+                <span className="text-slate-500">วันหมดประกัน</span>
+                <span className="font-bold text-slate-900">
+                  {qrModalItem.noWarranty ? (
+                    <span className="text-amber-600">ไม่มีประกัน</span>
+                  ) : (
+                    new Date(qrModalItem.warrantyExpireDate).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' })
+                  )}
+                </span>
+              </div>
+              {!qrModalItem.noWarranty && (() => {
                 const w = checkWarranty(qrModalItem.warrantyExpireDate);
                 if (w.status === 'OK') return null;
                 const isExpired = w.status === 'EXPIRED';
@@ -1235,12 +1579,17 @@ export const EquipmentManager: React.FC<EquipmentManagerProps> = ({
                       `อุปกรณ์: ${items.length} รายการ`,
                       `---`,
                       ...items.map((item, index) => {
-                        const w = checkWarranty(item.warrantyExpireDate);
                         const buyDate = new Date(item.purchaseDate).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' });
-                        const expDate = new Date(item.warrantyExpireDate).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' });
-                        const statusEmoji = w.status === 'EXPIRED' ? '❌' : w.status === 'WARNING' ? '⚠️' : '✅';
-                        const daysText = w.status === 'EXPIRED' ? `หมด ${w.days}วัน` : `${w.days}วัน`;
-                        return `${index + 1}. ${item.name} (${buyDate}-${expDate}) ${daysText} ${statusEmoji}`;
+                        const installDate = item.installationDate ? new Date(item.installationDate).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' }) : '-';
+                        const warrantyStatus = item.noWarranty ? 'ไม่มีประกัน' : (() => {
+                          const w = checkWarranty(item.warrantyExpireDate);
+                          return w.status === 'EXPIRED' ? `หมด ${w.days}วัน` : `${w.days}วัน`;
+                        })();
+                        const statusEmoji = item.noWarranty ? '⚠️' : (() => {
+                          const w = checkWarranty(item.warrantyExpireDate);
+                          return w.status === 'EXPIRED' ? '❌' : w.status === 'WARNING' ? '⚠️' : '✅';
+                        })();
+                        return `${index + 1}. ${item.name} ติดตั้ง:${installDate} ${warrantyStatus} ${statusEmoji}`;
                       })
                     ];
                     return lines.join('\n');
@@ -1283,10 +1632,9 @@ export const EquipmentManager: React.FC<EquipmentManagerProps> = ({
             <div className="w-full bg-slate-50 rounded-2xl p-4 space-y-2 max-h-60 overflow-y-auto">
               <h4 className="text-xs font-black text-slate-500 uppercase tracking-wider mb-3">รายการอุปกรณ์ ({sortedQrItems.length})</h4>
               {sortedQrItems.map((item, index) => {
-                const w = checkWarranty(item.warrantyExpireDate);
+                const w = item.noWarranty ? null : checkWarranty(item.warrantyExpireDate);
                 const buyDate = new Date(item.purchaseDate).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' });
-                const expDate = new Date(item.warrantyExpireDate).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' });
-                const daysText = w.status === 'EXPIRED' ? `ลบ ${w.days}` : `${w.days}`;
+                const installDate = item.installationDate ? new Date(item.installationDate).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' }) : '-';
 
                 return (
                   <div key={item.id} className="flex flex-col bg-white p-3 rounded-xl border border-slate-100 shadow-sm">
@@ -1298,20 +1646,27 @@ export const EquipmentManager: React.FC<EquipmentManagerProps> = ({
                           <p className="text-[10px] text-slate-400">{item.serialNumber}</p>
                         </div>
                       </div>
-                      <div className={`text-xs font-bold px-2 py-1 rounded-lg whitespace-nowrap ml-2 flex flex-col items-end ${w.status === 'EXPIRED' ? 'bg-red-50 text-red-600' :
-                        w.status === 'WARNING' ? 'bg-amber-50 text-amber-600' :
-                          'bg-emerald-50 text-emerald-600'
+                      <div className={`text-xs font-bold px-2 py-1 rounded-lg whitespace-nowrap ml-2 flex flex-col items-end ${item.noWarranty ? 'bg-amber-50 text-amber-600' :
+                          w?.status === 'EXPIRED' ? 'bg-red-50 text-red-600' :
+                            w?.status === 'WARNING' ? 'bg-amber-50 text-amber-600' :
+                              'bg-emerald-50 text-emerald-600'
                         }`}>
-                        <span>{expDate}</span>
+                        <span>{installDate}</span>
                       </div>
                     </div>
                     <div className="flex items-center gap-3 pl-8 text-[11px] text-slate-500 border-t border-slate-50 pt-2 mt-1">
                       <span className="flex items-center gap-1 bg-slate-50 px-2 py-0.5 rounded text-slate-600">
                         🛒 ซื้อ: <span className="font-bold">{buyDate}</span>
                       </span>
-                      <span className="flex items-center gap-1 bg-slate-50 px-2 py-0.5 rounded text-slate-600">
-                        ⏳ เหลือ: <span className={`font-bold ${w.status === 'EXPIRED' ? 'text-red-500' : w.status === 'WARNING' ? 'text-amber-500' : 'text-emerald-500'}`}>{w.days} วัน</span>
-                      </span>
+                      {item.noWarranty ? (
+                        <span className="flex items-center gap-1 bg-amber-50 px-2 py-0.5 rounded text-amber-600 font-bold">
+                          ⚠️ ไม่มีประกัน
+                        </span>
+                      ) : (
+                        <span className="flex items-center gap-1 bg-slate-50 px-2 py-0.5 rounded text-slate-600">
+                          ⏳ เหลือ: <span className={`font-bold ${w?.status === 'EXPIRED' ? 'text-red-500' : w?.status === 'WARNING' ? 'text-amber-500' : 'text-emerald-500'}`}>{w?.days} วัน</span>
+                        </span>
+                      )}
                     </div>
                   </div>
                 );
