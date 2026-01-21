@@ -175,6 +175,8 @@ export enum EquipmentType {
   HDMI_CABLE = 'HDMI_CABLE',
   LAN_CABLE = 'LAN_CABLE',
   POWER_CABLE = 'POWER_CABLE',
+  ROUTER_4G = 'ROUTER_4G',
+  SIM_AIS = 'SIM_AIS',
   OTHER = 'OTHER'
 }
 
@@ -186,6 +188,8 @@ export interface Equipment {
   details?: string;
   purchaseDate: string;
   warrantyExpireDate: string;
+  installationDate?: string;  // วันที่ติดตั้ง
+  noWarranty?: boolean;       // สินค้าไม่มีประกัน
   status: EquipmentStatus;
   location?: string;
   lat?: number;
@@ -194,4 +198,18 @@ export interface Equipment {
   images?: string[];
   notes?: string;
   isOnline?: boolean;
+}
+
+// --- SIM Card Registration Types ---
+
+export type SimCardStatus = 'ACTIVE' | 'BROKEN' | 'LOST';
+
+export interface SimCard {
+  id: string;
+  phoneNumber: string;
+  status: SimCardStatus;
+  location?: string;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
 }
