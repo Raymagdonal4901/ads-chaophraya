@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { AdSpot, MediaType, User, Equipment, EquipmentType, EquipmentStatus, PricingPackage, BoatSchedule } from '../types';
 import {
-    X, Play, Edit, SquarePen, Maximize2,
+    X, Play, Edit, SquarePen, Maximize2, Search,
     Ship, Anchor,
     MonitorPlay, LayoutGrid, Zap, TrendingUp, Target,
     Save,
@@ -403,6 +403,8 @@ export const MapExplorer: React.FC<MapExplorerProps> = ({
     const [selectedEquipment, setSelectedEquipment] = useState<Equipment | null>(null);
     const [filterType, setFilterType] = useState<MediaType | 'ALL'>('ALL');
     const [boatFlagFilter, setBoatFlagFilter] = useState<string>('ALL');
+    const [mapSearchQuery, setMapSearchQuery] = useState('');
+    const [isSearchingMap, setIsSearchingMap] = useState(false);
 
     const [activeTab, setActiveTab] = useState<'OVERVIEW' | 'AUDIENCE' | 'PACKAGES' | 'MARKETING'>('OVERVIEW');
     const [isPanelCollapsed, setIsPanelCollapsed] = useState(false);
@@ -524,12 +526,61 @@ export const MapExplorer: React.FC<MapExplorerProps> = ({
         };
     }, [adSpots, filterType, boatFlagFilter]);
 
+    // NEW: Search Autocomplete
+    const searchResults = useMemo(() => {
+        if (!mapSearchQuery.trim()) return [];
+        const query = mapSearchQuery.toLowerCase();
+        return adSpots.filter(spot =>
+            spot.name.toLowerCase().includes(query) ||
+            spot.type.toLowerCase().includes(query)
+        ).slice(0, 5); // Limit to 5 results
+    }, [adSpots, mapSearchQuery]);
+
+    const handleSelectLocation = (spot: AdSpot) => {
+        if (spot.lat && spot.lng && mapInstanceRef.current && window.L) {
+            mapInstanceRef.current.flyTo([spot.lat, spot.lng], 16, { animate: true });
+            setSelectedSpot(spot);
+            setIsPanelCollapsed(false);
+            setMapSearchQuery(''); // Clear search after selection
+        }
+    };
+
     const allMediaForLightbox = useMemo(() => {
         if (!selectedSpot) return [];
         const images = [selectedSpot.imageUrl, ...(selectedSpot.gallery || [])].filter(Boolean).map(url => ({ type: 'image' as const, url }));
         const videos = [selectedSpot.videoUrl, ...(selectedSpot.videoGallery || [])].filter(Boolean).map(url => ({ type: 'video' as const, url: url! }));
         return [...images, ...videos];
     }, [selectedSpot]);
+
+
+
+    const handleSearchLocation = async (e?: React.FormEvent) => {
+        e?.preventDefault();
+        if (!mapSearchQuery.trim()) return;
+
+        setIsSearchingMap(true);
+        try {
+            const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(mapSearchQuery)}&limit=1`);
+            const data = await response.json();
+
+            if (data && data.length > 0) {
+                const { lat, lon } = data[0];
+                const newLat = parseFloat(lat);
+                const newLng = parseFloat(lon);
+
+                if (mapInstanceRef.current && window.L) {
+                    mapInstanceRef.current.flyTo([newLat, newLng], 15, { animate: true });
+                }
+            } else {
+                alert('ไม่พบสถานที่นี้ ลองระบุชื่อให้ชัดเจนขึ้น');
+            }
+        } catch (error) {
+            console.error("Search failed:", error);
+            alert('เกิดข้อผิดพลาดในการค้นหา');
+        } finally {
+            setIsSearchingMap(false);
+        }
+    };
 
     const handleCreateNew = () => {
         const newSpot: AdSpot = {
@@ -1166,6 +1217,53 @@ export const MapExplorer: React.FC<MapExplorerProps> = ({
             {/* Map Area */}
             <div className="flex-grow relative rounded-[3.5rem] overflow-hidden shadow-2xl border-[6px] border-white bg-slate-200">
                 <div ref={mapContainerRef} className="absolute inset-0 z-0"></div>
+
+                {/* Search Bar Overlay */}
+                <div className="absolute top-6 left-6 z-[400] max-w-sm w-full">
+                    <div className="bg-white/90 backdrop-blur-md shadow-lg rounded-2xl p-2 flex items-center gap-2 border border-white/50">
+                        <div className="p-2 bg-indigo-50 rounded-xl text-indigo-600">
+                            <MapPin size={20} />
+                        </div>
+                        <form onSubmit={handleSearchLocation} className="flex-grow flex items-center">
+                            <input
+                                type="text"
+                                className="w-full bg-transparent border-none outline-none text-slate-700 placeholder:text-slate-400 font-bold text-sm"
+                                placeholder="ค้นหาสถานที่ (เช่น ไอคอนสยาม)..."
+                                value={mapSearchQuery}
+                                onChange={(e) => setMapSearchQuery(e.target.value)}
+                            />
+                            <button
+                                type="submit"
+                                disabled={isSearchingMap}
+                                className="p-2 text-slate-400 hover:text-indigo-600 transition-colors disabled:opacity-50"
+                            >
+                                {isSearchingMap ? <div className="w-4 h-4 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin"></div> : <Search size={20} />}
+                            </button>
+                        </form>
+                    </div>
+
+                    {/* Autocomplete Dropdown */}
+                    {searchResults.length > 0 && (
+                        <div className="absolute top-full left-0 right-0 mt-2 bg-white/90 backdrop-blur-md shadow-xl rounded-xl overflow-hidden border border-white/50 animate-fadeIn">
+                            {searchResults.map(spot => (
+                                <div
+                                    key={spot.id}
+                                    onClick={() => handleSelectLocation(spot)}
+                                    className="p-3 hover:bg-indigo-50 cursor-pointer border-b border-slate-100 last:border-none flex items-center gap-3 group"
+                                >
+                                    <div className="p-1.5 bg-slate-100 rounded-lg text-slate-500 group-hover:bg-indigo-100 group-hover:text-indigo-600 transition-colors">
+                                        <MapPin size={16} />
+                                    </div>
+                                    <div className="min-w-0">
+                                        <div className="text-sm font-bold text-slate-800 truncate group-hover:text-indigo-700">{spot.name}</div>
+                                        <div className="text-[10px] font-bold text-slate-400">{spot.type}</div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+
                 {isEditingRoute && (
                     <div className="absolute bottom-10 left-1/2 -translate-x-1/2 z-[1002] flex flex-col items-center gap-4 animate-slideUp">
                         <div className="bg-slate-900/90 backdrop-blur-2xl text-white p-2.5 rounded-[3.5rem] flex flex-col gap-3">
@@ -1349,6 +1447,9 @@ export const MapExplorer: React.FC<MapExplorerProps> = ({
                                                         </p>
                                                     </div>
                                                 </div>
+
+
+
 
                                                 {allMediaForLightbox.some(m => m.type === 'image') && (
                                                     <div className="space-y-2">
@@ -1698,6 +1799,6 @@ export const MapExplorer: React.FC<MapExplorerProps> = ({
                     </div>
                 )}
             </div>
-        </div>
+        </div >
     );
 };

@@ -91,6 +91,21 @@ export const EquipmentManager: React.FC<EquipmentManagerProps> = ({
   const [isScanning, setIsScanning] = useState(false);
   const [qrModalItem, setQrModalItem] = useState<Equipment | null>(null);
   const [scanResultItem, setScanResultItem] = useState<Equipment | null>(null);
+  const [qrFolderName, setQrFolderName] = useState<string | null>(null);
+
+  // Image Viewer State
+  const [viewImage, setViewImage] = useState<{ images: string[], index: number } | null>(null);
+
+  // Folder Management States
+  const [emptyFolders, setEmptyFolders] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('equipment_empty_folders');
+      return saved ? JSON.parse(saved) : [];
+    } catch { return []; }
+  });
+  const [showCreateFolderModal, setShowCreateFolderModal] = useState(false);
+  const [newFolderName, setNewFolderName] = useState('');
+  const [deleteFolderConfirm, setDeleteFolderConfirm] = useState<string | null>(null);
   const scannerRef = useRef<any>(null);
 
   // Map Picker States
@@ -98,6 +113,8 @@ export const EquipmentManager: React.FC<EquipmentManagerProps> = ({
   const pickerMapContainerRef = useRef<HTMLDivElement>(null);
   const pickerMapInstanceRef = useRef<any>(null);
   const pickerMarkerRef = useRef<any>(null);
+  const [mapSearchQuery, setMapSearchQuery] = useState('');
+  const [isSearchingMap, setIsSearchingMap] = useState(false);
 
   // Long Press State
   const [longPressId, setLongPressId] = useState<string | null>(null);
@@ -132,16 +149,47 @@ export const EquipmentManager: React.FC<EquipmentManagerProps> = ({
     return { total, warning, repair, broken, waiting };
   }, [equipmentList]);
 
-  // Grouping by Folder (Location)
+  // Grouping by Folder (Location) - includes empty folders
   const folders = useMemo(() => {
     const groups: Record<string, Equipment[]> = {};
+    // Add empty folders first
+    emptyFolders.forEach(folderName => {
+      if (!groups[folderName]) groups[folderName] = [];
+    });
+    // Then add equipment-based folders
     equipmentList.forEach(item => {
       const loc = item.location ? item.location.trim() : 'ไม่ระบุตำแหน่ง';
       if (!groups[loc]) groups[loc] = [];
       groups[loc].push(item);
     });
     return groups;
-  }, [equipmentList]);
+  }, [equipmentList, emptyFolders]);
+
+  // Sort items for QR View (Purchase Date -> Warranty Expiry -> Days Remaining)
+  const sortedQrItems = useMemo(() => {
+    if (!qrFolderName || !folders[qrFolderName]) return [];
+    return [...folders[qrFolderName]].sort((a, b) => {
+      // 1. Purchase Date (Ascending)
+      const pA = new Date(a.purchaseDate).getTime();
+      const pB = new Date(b.purchaseDate).getTime();
+      if (pA !== pB) return pA - pB;
+
+      // 2. Warranty Expiry (Ascending)
+      const wA = new Date(a.warrantyExpireDate).getTime();
+      const wB = new Date(b.warrantyExpireDate).getTime();
+      if (wA !== wB) return wA - wB;
+
+      // 3. Days Remaining (Ascending)
+      const daysA = checkWarranty(a.warrantyExpireDate).days;
+      const daysB = checkWarranty(b.warrantyExpireDate).days;
+      return daysA - daysB;
+    });
+  }, [folders, qrFolderName]);
+
+  // Persist empty folders
+  useEffect(() => {
+    localStorage.setItem('equipment_empty_folders', JSON.stringify(emptyFolders));
+  }, [emptyFolders]);
 
   // Initialize Map Picker
   useEffect(() => {
@@ -201,22 +249,110 @@ export const EquipmentManager: React.FC<EquipmentManagerProps> = ({
     setShowMapPicker(false);
   };
 
+  const handleSearchLocation = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (!mapSearchQuery.trim()) return;
+
+    setIsSearchingMap(true);
+    try {
+      // Use OSM Nominatim for searching real places
+      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(mapSearchQuery)}&limit=1`);
+      const data = await response.json();
+
+      if (data && data.length > 0) {
+        const { lat, lon } = data[0];
+        const newLat = parseFloat(lat);
+        const newLng = parseFloat(lon);
+
+        setFormData(prev => ({ ...prev, lat: newLat, lng: newLng }));
+
+        if (pickerMapInstanceRef.current && window.L) {
+          const map = pickerMapInstanceRef.current;
+          map.setView([newLat, newLng], 16);
+
+          if (pickerMarkerRef.current) {
+            pickerMarkerRef.current.setLatLng([newLat, newLng]);
+          } else {
+            pickerMarkerRef.current = window.L.marker([newLat, newLng], {
+              icon: window.L.divIcon({
+                className: 'custom-pin',
+                html: '<div style="background-color:#4f46e5;width:24px;height:24px;border-radius:50%;border:3px solid white;box-shadow:0 2px 5px rgba(0,0,0,0.3);"></div>',
+                iconSize: [24, 24],
+                iconAnchor: [12, 12]
+              })
+            }).addTo(map);
+          }
+        }
+      } else {
+        alert('ไม่พบสถานที่นี้ ลองระบุชื่อให้ชัดเจนขึ้น');
+      }
+    } catch (error) {
+      console.error("Search failed:", error);
+      alert('เกิดข้อผิดพลาดในการค้นหา');
+    } finally {
+      setIsSearchingMap(false);
+    }
+  };
+
+
+
   // Handlers
-  const handleAddNew = () => {
+  const handleAddNew = (presetLocation?: string) => {
     setEditingItem(null);
     setFormData({
       type: EquipmentType.TV_SCREEN,
       status: EquipmentStatus.AVAILABLE,
       purchaseDate: new Date().toISOString().split('T')[0],
       warrantyExpireDate: new Date(new Date().setFullYear(new Date().getFullYear() + 1)).toISOString().split('T')[0],
-      isOnline: true // Default
+      isOnline: true, // Default
+      location: presetLocation || '', // Pre-populate if adding to folder
+      images: []
     });
     setIsModalOpen(true);
   };
 
+  // Folder Handlers
+  const handleCreateFolder = () => {
+    const trimmedName = newFolderName.trim();
+    if (!trimmedName) {
+      alert('กรุณาระบุชื่อโฟลเดอร์');
+      return;
+    }
+    if (folders[trimmedName]) {
+      alert('โฟลเดอร์นี้มีอยู่แล้ว');
+      return;
+    }
+    setEmptyFolders(prev => [...prev, trimmedName]);
+    setNewFolderName('');
+    setShowCreateFolderModal(false);
+  };
+
+  const handleDeleteFolder = (folderName: string) => {
+    const itemsInFolder = folders[folderName] || [];
+
+    if (itemsInFolder.length > 0) {
+      // Move all items to "ไม่ระบุตำแหน่ง" 
+      itemsInFolder.forEach(item => {
+        onUpdate({ ...item, location: '' });
+      });
+    }
+
+    // Remove from empty folders if exists
+    setEmptyFolders(prev => prev.filter(f => f !== folderName));
+    setDeleteFolderConfirm(null);
+
+    // If currently inside the deleted folder, go back
+    if (activeFolder === folderName) {
+      setActiveFolder(null);
+    }
+  };
+
   const handleEdit = (item: Equipment) => {
     setEditingItem(item);
-    setFormData(item);
+    setFormData({
+      ...item,
+      images: item.images || (item.imageUrl ? [item.imageUrl] : [])
+    });
     setIsModalOpen(true);
   };
 
@@ -258,18 +394,40 @@ export const EquipmentManager: React.FC<EquipmentManagerProps> = ({
   };
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
+    const files = e.target.files;
+    if (files && files.length > 0) {
       setIsUploading(true);
       try {
-        const imageUrl = await equipmentService.uploadImage(file);
-        setFormData(prev => ({ ...prev, imageUrl }));
+        const newImages = [...(formData.images || [])];
+        // Support uploading multiple files if the input allowed it, or just one
+        for (let i = 0; i < files.length; i++) {
+          const imageUrl = await equipmentService.uploadImage(files[i]);
+          newImages.push(imageUrl);
+        }
+
+        setFormData(prev => ({
+          ...prev,
+          images: newImages,
+          imageUrl: newImages[0] // Always update main thumb to first image
+        }));
       } catch (error) {
         alert("Failed to upload image. Please try again.");
       } finally {
         setIsUploading(false);
       }
     }
+  };
+
+  const handleRemoveImage = (indexToRemove: number) => {
+    setFormData(prev => {
+      const currentImages = prev.images || [];
+      const newImages = currentImages.filter((_, index) => index !== indexToRemove);
+      return {
+        ...prev,
+        images: newImages,
+        imageUrl: newImages.length > 0 ? newImages[0] : ''
+      };
+    });
   };
 
   const handleGetCurrentLocation = () => {
@@ -299,7 +457,28 @@ export const EquipmentManager: React.FC<EquipmentManagerProps> = ({
     onUpdate({ ...item, isOnline: !item.isOnline });
   };
 
-  // Scanning Handlers
+
+
+  const handleViewImages = (item: Equipment) => {
+    const images = item.images && item.images.length > 0 ? item.images : (item.imageUrl ? [item.imageUrl] : []);
+    if (images.length > 0) {
+      setViewImage({ images, index: 0 });
+    }
+  };
+
+  const handleNextImage = (e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    if (viewImage) {
+      setViewImage(prev => prev ? { ...prev, index: (prev.index + 1) % prev.images.length } : null);
+    }
+  };
+
+  const handlePrevImage = (e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    if (viewImage) {
+      setViewImage(prev => prev ? { ...prev, index: (prev.index - 1 + prev.images.length) % prev.images.length } : null);
+    }
+  };
   const startScanning = () => {
     setIsScanning(true);
   };
@@ -470,42 +649,88 @@ export const EquipmentManager: React.FC<EquipmentManagerProps> = ({
         </div>
 
         {viewMode === 'FOLDER' && !activeFolder && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 animate-fadeIn">
-            {Object.keys(folders).map(folderName => (
-              <div
-                key={folderName}
-                onClick={() => setActiveFolder(folderName)}
-                className="bg-white p-6 rounded-2xl border border-slate-200 hover:border-indigo-400 hover:shadow-lg cursor-pointer transition-all group relative overflow-hidden"
+          <div className="space-y-4 animate-fadeIn">
+            {/* Header with Create Folder Button */}
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-bold text-slate-700">โฟลเดอร์ทั้งหมด ({Object.keys(folders).length})</h2>
+              <button
+                onClick={() => setShowCreateFolderModal(true)}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 shadow-lg shadow-indigo-200 transition-all"
               >
-                <div className="absolute top-0 right-0 p-8 opacity-[0.03] group-hover:opacity-[0.1] transition-opacity">
-                  <FolderOpen size={100} />
-                </div>
-                <div className="flex items-center gap-4 mb-4">
-                  <div className="w-14 h-14 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center group-hover:bg-indigo-600 group-hover:text-white transition-colors">
-                    <Folder size={28} />
+                <Plus size={18} /> สร้างโฟลเดอร์ใหม่
+              </button>
+            </div>
+
+            {/* Folder Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+              {Object.keys(folders).map(folderName => (
+                <div
+                  key={folderName}
+                  onClick={() => setActiveFolder(folderName)}
+                  className="bg-white p-6 rounded-2xl border border-slate-200 hover:border-indigo-400 hover:shadow-lg cursor-pointer transition-all group relative overflow-hidden"
+                >
+                  <div className="absolute top-0 right-0 p-8 opacity-[0.03] group-hover:opacity-[0.1] transition-opacity">
+                    <FolderOpen size={100} />
                   </div>
-                  <div>
-                    <h3 className="font-bold text-slate-900 text-lg leading-tight group-hover:text-indigo-600 transition-colors">{folderName}</h3>
-                    <span className="text-xs text-slate-500 font-medium">{folders[folderName].length} รายการ</span>
+                  <div className="flex items-center gap-4 mb-4">
+                    <div className="w-14 h-14 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center group-hover:bg-indigo-600 group-hover:text-white transition-colors">
+                      <Folder size={28} />
+                    </div>
+                    <div className="flex-grow">
+                      <h3 className="font-bold text-slate-900 text-lg leading-tight group-hover:text-indigo-600 transition-colors">{folderName}</h3>
+                      <span className="text-xs text-slate-500 font-medium">{folders[folderName].length} รายการ</span>
+                    </div>
+                    <div className="flex flex-col gap-1 z-10">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setQrFolderName(folderName); }}
+                        className="p-2 bg-slate-100 hover:bg-indigo-100 text-slate-500 hover:text-indigo-600 rounded-lg transition-colors"
+                        title="ดู QR Code วันหมดประกันทั้งหมด"
+                      >
+                        <QrCode size={16} />
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setDeleteFolderConfirm(folderName); }}
+                        className="p-2 bg-slate-100 hover:bg-red-100 text-slate-500 hover:text-red-600 rounded-lg transition-colors"
+                        title="ลบโฟลเดอร์"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex items-center text-xs font-bold text-slate-400 group-hover:text-indigo-500 gap-1 mt-2">
+                    เปิดดูรายการ <ArrowRight size={14} />
                   </div>
                 </div>
-                <div className="flex items-center text-xs font-bold text-slate-400 group-hover:text-indigo-500 gap-1 mt-2">
-                  เปิดดูรายการ <ArrowRight size={14} />
-                </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         )}
 
         {(viewMode === 'GRID' || activeFolder) && (
           <div className="space-y-4">
             {activeFolder && (
-              <div className="flex items-center gap-2 mb-4">
-                <button onClick={() => setActiveFolder(null)} className="text-slate-400 hover:text-indigo-600 flex items-center gap-1 text-sm font-bold">
-                  <Folder size={16} /> โฟลเดอร์ทั้งหมด
-                </button>
-                <ArrowRight size={14} className="text-slate-300" />
-                <span className="text-slate-900 font-bold">{activeFolder}</span>
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <button onClick={() => setActiveFolder(null)} className="text-slate-400 hover:text-indigo-600 flex items-center gap-1 text-sm font-bold">
+                    <Folder size={16} /> โฟลเดอร์ทั้งหมด
+                  </button>
+                  <ArrowRight size={14} className="text-slate-300" />
+                  <span className="text-slate-900 font-bold">{activeFolder}</span>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setQrFolderName(activeFolder)}
+                    className="bg-slate-100 hover:bg-indigo-100 text-slate-600 hover:text-indigo-600 px-4 py-2 rounded-xl font-bold flex items-center gap-2 transition-all"
+                  >
+                    <QrCode size={16} /> QR รวม
+                  </button>
+                  <button
+                    onClick={() => handleAddNew(activeFolder)}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 shadow-lg shadow-indigo-200 transition-all"
+                  >
+                    <Plus size={16} /> เพิ่มอุปกรณ์ใน folder นี้
+                  </button>
+                </div>
               </div>
             )}
 
@@ -516,9 +741,19 @@ export const EquipmentManager: React.FC<EquipmentManagerProps> = ({
 
                 return (
                   <div key={item.id} className="bg-white rounded-2xl border border-slate-200 overflow-hidden hover:shadow-lg transition-all group flex flex-col h-full relative">
-                    <div className="h-48 bg-slate-100 relative overflow-hidden">
-                      {item.imageUrl ? (
-                        <img src={item.imageUrl} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                    <div
+                      className="h-48 bg-slate-100 relative overflow-hidden group/image cursor-pointer"
+                      onClick={() => handleViewImages(item)}
+                    >
+                      {item.imageUrl || (item.images && item.images.length > 0) ? (
+                        <div className="w-full h-full relative">
+                          <img src={item.imageUrl || (item.images ? item.images[0] : '')} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                          {item.images && item.images.length > 1 && (
+                            <div className="absolute bottom-2 right-2 bg-black/50 text-white text-[10px] px-2 py-0.5 rounded-full backdrop-blur-sm">
+                              +{item.images.length - 1}
+                            </div>
+                          )}
+                        </div>
                       ) : (
                         <div className="w-full h-full flex items-center justify-center text-slate-300">
                           <ImageIcon size={48} />
@@ -547,7 +782,7 @@ export const EquipmentManager: React.FC<EquipmentManagerProps> = ({
                       <h3 className="font-bold text-slate-900 text-lg mb-2 line-clamp-1">{item.name}</h3>
 
                       <div className="space-y-2 text-sm text-slate-500 mb-4 flex-grow">
-                        <div className="flex items-center gap-2"><FileText size={14} /> <span className="truncate">{item.serialNumber || '-'}</span></div>
+                        <div className="flex items-center gap-2" title="วันที่ซื้อ"><Calendar size={14} /> <span className="truncate">{new Date(item.purchaseDate).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' })}</span></div>
                         <div className="flex items-center gap-2 group/loc">
                           <MapPin size={14} className="group-hover/loc:text-indigo-600 transition-colors" />
                           <span className="truncate flex-grow">{item.location || 'ไม่ระบุตำแหน่ง'}</span>
@@ -712,22 +947,34 @@ export const EquipmentManager: React.FC<EquipmentManagerProps> = ({
               </div>
 
               <div className="p-6 space-y-6">
-                <div className="flex justify-center">
-                  <div className="relative group cursor-pointer w-full h-48 rounded-2xl border-2 border-dashed border-slate-300 hover:border-indigo-500 bg-slate-50 flex flex-col items-center justify-center overflow-hidden transition-all">
-                    {isUploading ? (
-                      <div className="flex flex-col items-center text-indigo-500">
-                        <Loader2 size={32} className="mb-2 animate-spin" />
-                        <span className="text-xs font-bold uppercase tracking-wider">Uploading...</span>
+                <div>
+                  <label className="text-xs font-bold text-slate-900 uppercase mb-2 block">รูปภาพประกอบ ({formData.images?.length || 0})</label>
+                  <div className="grid grid-cols-4 gap-3 mb-3">
+                    {formData.images?.map((img, idx) => (
+                      <div key={idx} className="relative aspect-square rounded-xl overflow-hidden border border-slate-200 group">
+                        <img src={img} className="w-full h-full object-cover" />
+                        <button
+                          onClick={() => handleRemoveImage(idx)}
+                          className="absolute top-1 right-1 bg-red-500 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                        >
+                          <X size={12} />
+                        </button>
                       </div>
-                    ) : formData.imageUrl ? (
-                      <img src={formData.imageUrl} className="w-full h-full object-cover" />
-                    ) : (
-                      <div className="flex flex-col items-center text-slate-400">
-                        <Upload size={32} className="mb-2 group-hover:text-indigo-500" />
-                        <span className="text-xs font-bold uppercase tracking-wider group-hover:text-indigo-500">อัปโหลดรูปภาพ</span>
-                      </div>
-                    )}
-                    <input type="file" className="absolute inset-0 opacity-0 cursor-pointer" accept="image/*" onChange={handleImageUpload} disabled={isUploading} />
+                    ))}
+                    <div className="relative group cursor-pointer aspect-square rounded-xl border-2 border-dashed border-slate-300 hover:border-indigo-500 bg-slate-50 flex flex-col items-center justify-center overflow-hidden transition-all">
+                      {isUploading ? (
+                        <div className="flex flex-col items-center text-indigo-500">
+                          <Loader2 size={24} className="mb-1 animate-spin" />
+                          <span className="text-[10px] font-bold uppercase tracking-wider">Uploading...</span>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col items-center text-slate-400">
+                          <Upload size={24} className="mb-1 group-hover:text-indigo-500" />
+                          <span className="text-[10px] font-bold uppercase tracking-wider group-hover:text-indigo-500">เพิ่มรูป</span>
+                        </div>
+                      )}
+                      <input type="file" multiple className="absolute inset-0 opacity-0 cursor-pointer" accept="image/*" onChange={handleImageUpload} disabled={isUploading} />
+                    </div>
                   </div>
                 </div>
 
@@ -836,8 +1083,31 @@ export const EquipmentManager: React.FC<EquipmentManagerProps> = ({
               </div>
               <div className="flex-grow relative bg-slate-100">
                 <div ref={pickerMapContainerRef} className="absolute inset-0 z-0"></div>
-                <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-white/90 backdrop-blur px-4 py-2 rounded-full shadow-lg z-[1000] text-xs font-bold text-slate-600 border border-slate-200 pointer-events-none">
-                  คลิกบนแผนที่เพื่อปักหมุด
+
+                {/* Map Search Overlay */}
+                <div className="absolute top-4 left-4 right-4 z-[1000] flex flex-col gap-2 pointer-events-none">
+                  <div className="bg-white/90 backdrop-blur shadow-lg rounded-xl p-2 pointer-events-auto flex items-center gap-2 max-w-md mx-auto w-full">
+                    <Search size={20} className="text-slate-400 ml-2" />
+                    <form onSubmit={handleSearchLocation} className="flex-grow flex items-center">
+                      <input
+                        type="text"
+                        className="w-full bg-transparent border-none outline-none text-slate-700 placeholder:text-slate-400 font-medium"
+                        placeholder="ค้นหาสถานที่ (เช่น ไอคอนสยาม, ท่าเรือสาทร)..."
+                        value={mapSearchQuery}
+                        onChange={(e) => setMapSearchQuery(e.target.value)}
+                      />
+                      <button
+                        type="submit"
+                        disabled={isSearchingMap}
+                        className="bg-indigo-600 hover:bg-indigo-700 text-white p-2 rounded-lg transition-colors disabled:opacity-50"
+                      >
+                        {isSearchingMap ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
+                      </button>
+                    </form>
+                  </div>
+                  <div className="bg-white/90 backdrop-blur px-4 py-2 rounded-full shadow-lg text-xs font-bold text-slate-600 border border-slate-200 mx-auto w-fit">
+                    คลิกบนแผนที่เพื่อปรับตำแหน่งหมุด
+                  </div>
                 </div>
               </div>
               <div className="p-4 border-t border-slate-100 flex justify-between items-center bg-slate-50">
@@ -941,7 +1211,122 @@ export const EquipmentManager: React.FC<EquipmentManagerProps> = ({
         </div>
       )}
 
-      {/* --- SCAN RESULT / WARRANTY MODAL --- */}
+      {/* --- FOLDER QR CODE MODAL (Combined Warranty) --- */}
+      {qrFolderName && folders[qrFolderName] && (
+        <div className="fixed inset-0 z-[6002] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl shadow-2xl p-8 flex flex-col items-center animate-slideUp w-full max-w-md relative max-h-[90vh] overflow-y-auto">
+            <button onClick={() => setQrFolderName(null)} className="absolute top-4 right-4 p-2 hover:bg-slate-100 rounded-full text-slate-400 hover:text-slate-600"><X size={24} /></button>
+
+            <div className="text-center mb-6">
+              <div className="w-16 h-16 rounded-2xl bg-indigo-100 text-indigo-600 flex items-center justify-center mx-auto mb-4">
+                <Folder size={32} />
+              </div>
+              <h3 className="text-xl font-bold text-slate-900">QR Code - {qrFolderName}</h3>
+              <p className="text-sm text-slate-500 mt-1">{folders[qrFolderName].length} อุปกรณ์ในโฟลเดอร์นี้</p>
+            </div>
+
+            <div className="bg-white p-4 rounded-2xl border-2 border-slate-100 shadow-sm mb-6">
+              <img
+                src={`https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(
+                  (() => {
+                    const items = sortedQrItems;
+                    const lines = [
+                      `📁 ${qrFolderName}`,
+                      `อุปกรณ์: ${items.length} รายการ`,
+                      `---`,
+                      ...items.map((item, index) => {
+                        const w = checkWarranty(item.warrantyExpireDate);
+                        const buyDate = new Date(item.purchaseDate).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' });
+                        const expDate = new Date(item.warrantyExpireDate).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' });
+                        const statusEmoji = w.status === 'EXPIRED' ? '❌' : w.status === 'WARNING' ? '⚠️' : '✅';
+                        const daysText = w.status === 'EXPIRED' ? `หมด ${w.days}วัน` : `${w.days}วัน`;
+                        return `${index + 1}. ${item.name} (${buyDate}-${expDate}) ${daysText} ${statusEmoji}`;
+                      })
+                    ];
+                    return lines.join('\n');
+                  })()
+                )}`}
+                alt="Folder QR Code"
+                className="w-48 h-48 mx-auto"
+              />
+            </div>
+
+            {/* Warranty Summary Cards */}
+            <div className="w-full space-y-3 mb-6">
+              {(() => {
+                const items = folders[qrFolderName];
+                const warrantyStats = {
+                  expired: items.filter(i => checkWarranty(i.warrantyExpireDate).status === 'EXPIRED').length,
+                  warning: items.filter(i => checkWarranty(i.warrantyExpireDate).status === 'WARNING').length,
+                  ok: items.filter(i => checkWarranty(i.warrantyExpireDate).status === 'OK').length,
+                };
+                return (
+                  <div className="grid grid-cols-3 gap-2 text-center">
+                    <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-3">
+                      <div className="text-xl font-black text-emerald-600">{warrantyStats.ok}</div>
+                      <div className="text-[10px] font-bold text-emerald-500 uppercase">ปกติ</div>
+                    </div>
+                    <div className="bg-amber-50 border border-amber-100 rounded-xl p-3">
+                      <div className="text-xl font-black text-amber-600">{warrantyStats.warning}</div>
+                      <div className="text-[10px] font-bold text-amber-500 uppercase">ใกล้หมด</div>
+                    </div>
+                    <div className="bg-red-50 border border-red-100 rounded-xl p-3">
+                      <div className="text-xl font-black text-red-600">{warrantyStats.expired}</div>
+                      <div className="text-[10px] font-bold text-red-500 uppercase">หมดแล้ว</div>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Equipment List with Warranty */}
+            <div className="w-full bg-slate-50 rounded-2xl p-4 space-y-2 max-h-60 overflow-y-auto">
+              <h4 className="text-xs font-black text-slate-500 uppercase tracking-wider mb-3">รายการอุปกรณ์ ({sortedQrItems.length})</h4>
+              {sortedQrItems.map((item, index) => {
+                const w = checkWarranty(item.warrantyExpireDate);
+                const buyDate = new Date(item.purchaseDate).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' });
+                const expDate = new Date(item.warrantyExpireDate).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' });
+                const daysText = w.status === 'EXPIRED' ? `ลบ ${w.days}` : `${w.days}`;
+
+                return (
+                  <div key={item.id} className="flex flex-col bg-white p-3 rounded-xl border border-slate-100 shadow-sm">
+                    <div className="flex items-start justify-between mb-2">
+                      <div className="flex items-start gap-3 overflow-hidden">
+                        <span className="text-xs font-bold text-slate-400 min-w-[20px] mt-0.5">{index + 1}.</span>
+                        <div className="min-w-0">
+                          <p className="font-bold text-slate-900 text-sm truncate leading-tight">{item.name}</p>
+                          <p className="text-[10px] text-slate-400">{item.serialNumber}</p>
+                        </div>
+                      </div>
+                      <div className={`text-xs font-bold px-2 py-1 rounded-lg whitespace-nowrap ml-2 flex flex-col items-end ${w.status === 'EXPIRED' ? 'bg-red-50 text-red-600' :
+                        w.status === 'WARNING' ? 'bg-amber-50 text-amber-600' :
+                          'bg-emerald-50 text-emerald-600'
+                        }`}>
+                        <span>{expDate}</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3 pl-8 text-[11px] text-slate-500 border-t border-slate-50 pt-2 mt-1">
+                      <span className="flex items-center gap-1 bg-slate-50 px-2 py-0.5 rounded text-slate-600">
+                        🛒 ซื้อ: <span className="font-bold">{buyDate}</span>
+                      </span>
+                      <span className="flex items-center gap-1 bg-slate-50 px-2 py-0.5 rounded text-slate-600">
+                        ⏳ เหลือ: <span className={`font-bold ${w.status === 'EXPIRED' ? 'text-red-500' : w.status === 'WARNING' ? 'text-amber-500' : 'text-emerald-500'}`}>{w.days} วัน</span>
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <button
+              onClick={() => setQrFolderName(null)}
+              className="mt-6 w-full py-3 bg-slate-900 text-white rounded-xl font-bold hover:bg-slate-800 transition-all"
+            >
+              ปิด
+            </button>
+          </div>
+        </div>
+      )}
       {scanResultItem && (
         <div className="fixed inset-0 z-[6001] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white rounded-[2rem] shadow-2xl w-full max-w-sm overflow-hidden animate-slideUp p-6">
@@ -990,6 +1375,144 @@ export const EquipmentManager: React.FC<EquipmentManagerProps> = ({
                 ตกลง
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- CREATE FOLDER MODAL --- */}
+      {showCreateFolderModal && (
+        <div className="fixed inset-0 z-[6003] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl shadow-2xl p-6 w-full max-w-sm animate-slideUp">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-xl font-bold text-slate-900 flex items-center gap-2">
+                <Folder className="text-indigo-600" size={24} /> สร้างโฟลเดอร์ใหม่
+              </h3>
+              <button onClick={() => { setShowCreateFolderModal(false); setNewFolderName(''); }} className="p-2 hover:bg-slate-100 rounded-full text-slate-400 hover:text-slate-600">
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-slate-900 uppercase">ชื่อโฟลเดอร์</label>
+                <input
+                  type="text"
+                  className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-indigo-500 text-slate-900 font-medium"
+                  placeholder="เช่น ท่าเรือสาทร, คลังสินค้า A"
+                  value={newFolderName}
+                  onChange={(e) => setNewFolderName(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleCreateFolder()}
+                  autoFocus
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-3 mt-6">
+              <button
+                onClick={() => { setShowCreateFolderModal(false); setNewFolderName(''); }}
+                className="flex-1 py-3 border border-slate-200 rounded-xl font-bold text-slate-600 hover:bg-slate-50 transition-colors"
+              >
+                ยกเลิก
+              </button>
+              <button
+                onClick={handleCreateFolder}
+                className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-200 flex items-center justify-center gap-2"
+              >
+                <Plus size={18} /> สร้าง
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- DELETE FOLDER CONFIRMATION MODAL --- */}
+      {deleteFolderConfirm && (
+        <div className="fixed inset-0 z-[6003] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl shadow-2xl p-6 w-full max-w-sm animate-slideUp">
+            <div className="text-center mb-6">
+              <div className="w-16 h-16 rounded-full bg-red-100 text-red-600 flex items-center justify-center mx-auto mb-4">
+                <Trash2 size={32} />
+              </div>
+              <h3 className="text-xl font-bold text-slate-900 mb-2">ลบโฟลเดอร์</h3>
+              <p className="text-slate-600 text-sm">
+                คุณต้องการลบโฟลเดอร์ "<span className="font-bold">{deleteFolderConfirm}</span>" ใช่ไหม?
+              </p>
+              {folders[deleteFolderConfirm]?.length > 0 && (
+                <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-700 text-xs font-bold">
+                  <AlertTriangle size={14} className="inline-block mr-1" />
+                  อุปกรณ์ {folders[deleteFolderConfirm].length} รายการในโฟลเดอร์นี้จะถูกย้ายไป "ไม่ระบุตำแหน่ง"
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setDeleteFolderConfirm(null)}
+                className="flex-1 py-3 border border-slate-200 rounded-xl font-bold text-slate-600 hover:bg-slate-50 transition-colors"
+              >
+                ยกเลิก
+              </button>
+              <button
+                onClick={() => handleDeleteFolder(deleteFolderConfirm)}
+                className="flex-1 py-3 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 transition-colors shadow-lg shadow-red-200 flex items-center justify-center gap-2"
+              >
+                <Trash2 size={16} /> ลบ
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* --- IMAGE VIEWER MODAL --- */}
+      {viewImage && (
+        <div className="fixed inset-0 z-[7000] bg-black/95 backdrop-blur-xl flex flex-col items-center justify-center p-4 animate-fadeIn">
+          <button
+            onClick={() => setViewImage(null)}
+            className="absolute top-6 right-6 p-2 bg-white/10 hover:bg-white/20 rounded-full text-white transition-all z-50"
+          >
+            <X size={24} />
+          </button>
+
+          <div className="relative w-full max-w-5xl h-[80vh] flex items-center justify-center">
+            {viewImage.images.length > 1 && (
+              <button
+                onClick={handlePrevImage}
+                className="absolute left-0 p-4 text-white/50 hover:text-white hover:scale-110 transition-all z-40 outline-none"
+              >
+                <ArrowRight size={48} className="rotate-180" />
+              </button>
+            )}
+
+            <img
+              src={viewImage.images[viewImage.index]}
+              className="max-w-full max-h-full object-contain rounded-lg shadow-2xl"
+              alt="Full preview"
+            />
+
+            {viewImage.images.length > 1 && (
+              <button
+                onClick={handleNextImage}
+                className="absolute right-0 p-4 text-white/50 hover:text-white hover:scale-110 transition-all z-40 outline-none"
+              >
+                <ArrowRight size={48} />
+              </button>
+            )}
+          </div>
+
+          <div className="absolute bottom-8 left-1/2 -translate-x-1/2 bg-black/50 backdrop-blur-md px-4 py-2 rounded-full text-white text-sm font-medium border border-white/10">
+            {viewImage.index + 1} / {viewImage.images.length}
+          </div>
+
+          <div className="absolute bottom-20 left-1/2 -translate-x-1/2 flex gap-2 overflow-x-auto max-w-[90vw] p-2 no-scrollbar">
+            {viewImage.images.map((img, idx) => (
+              <button
+                key={idx}
+                onClick={() => setViewImage(prev => prev ? { ...prev, index: idx } : null)}
+                className={`w-16 h-16 rounded-lg overflow-hidden border-2 transition-all flex-shrink-0 ${idx === viewImage.index ? 'border-white scale-110 shadow-lg' : 'border-transparent opacity-50 hover:opacity-100'
+                  }`}
+              >
+                <img src={img} className="w-full h-full object-cover" />
+              </button>
+            ))}
           </div>
         </div>
       )}

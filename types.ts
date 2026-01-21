@@ -34,8 +34,8 @@ export interface TrafficBreakdown {
 }
 
 export interface AudienceData {
-  monthlyTraffic: { name: string; value: number }[]; 
-  trafficBreakdown: TrafficBreakdown; 
+  monthlyTraffic: { name: string; value: number }[];
+  trafficBreakdown: TrafficBreakdown;
   topInterests: { category: string; value: number }[];
 }
 
@@ -151,30 +151,30 @@ export enum ViewState {
   INSIGHTS = 'INSIGHTS',
   DASHBOARD = 'DASHBOARD',
   USER_MANAGEMENT = 'USER_MANAGEMENT',
-  EQUIPMENT = 'EQUIPMENT', 
+  EQUIPMENT = 'EQUIPMENT',
   MARKETING = 'MARKETING'
 }
 
 // --- Equipment System Types ---
 
 export enum EquipmentStatus {
-  AVAILABLE = 'AVAILABLE',       
-  INSTALLED = 'INSTALLED',       
-  WAITING_PURCHASE = 'WAITING_PURCHASE', 
-  IN_REPAIR = 'IN_REPAIR',       
-  BROKEN = 'BROKEN',             
-  LOST = 'LOST'                  
+  AVAILABLE = 'AVAILABLE',
+  INSTALLED = 'INSTALLED',
+  WAITING_PURCHASE = 'WAITING_PURCHASE',
+  IN_REPAIR = 'IN_REPAIR',
+  BROKEN = 'BROKEN',
+  LOST = 'LOST'
 }
 
 export enum EquipmentType {
-  TV_SCREEN = 'TV_SCREEN',       
-  ANDROID_BOX = 'ANDROID_BOX',   
-  SPLITTER = 'SPLITTER',         
-  TIMER = 'TIMER',               
-  EQUIPMENT_BOX = 'EQUIPMENT_BOX', 
-  HDMI_CABLE = 'HDMI_CABLE',     
-  LAN_CABLE = 'LAN_CABLE',       
-  POWER_CABLE = 'POWER_CABLE',   
+  TV_SCREEN = 'TV_SCREEN',
+  ANDROID_BOX = 'ANDROID_BOX',
+  SPLITTER = 'SPLITTER',
+  TIMER = 'TIMER',
+  EQUIPMENT_BOX = 'EQUIPMENT_BOX',
+  HDMI_CABLE = 'HDMI_CABLE',
+  LAN_CABLE = 'LAN_CABLE',
+  POWER_CABLE = 'POWER_CABLE',
   OTHER = 'OTHER'
 }
 
@@ -184,13 +184,14 @@ export interface Equipment {
   type: EquipmentType;
   serialNumber: string;
   details?: string;
-  purchaseDate: string; 
-  warrantyExpireDate: string; 
+  purchaseDate: string;
+  warrantyExpireDate: string;
   status: EquipmentStatus;
-  location?: string; 
-  lat?: number; 
-  lng?: number; 
+  location?: string;
+  lat?: number;
+  lng?: number;
   imageUrl?: string;
+  images?: string[];
   notes?: string;
-  isOnline?: boolean; 
+  isOnline?: boolean;
 }

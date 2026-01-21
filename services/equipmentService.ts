@@ -1,5 +1,5 @@
 import { Equipment } from '../types';
-import { MOCK_EQUIPMENT } from '../constants';
+import { MOCK_EQUIPMENT_LIST } from '../constants';
 
 const STORAGE_KEY = 'adspacenav_equipment_v1';
 const SIMULATED_LATENCY_MS = 600; // Simulate 600ms server response time
@@ -8,7 +8,7 @@ const SIMULATED_LATENCY_MS = 600; // Simulate 600ms server response time
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 class EquipmentService {
-  
+
   // GET /api/equipment
   async getAll(): Promise<Equipment[]> {
     await delay(SIMULATED_LATENCY_MS);
@@ -16,8 +16,8 @@ class EquipmentService {
       const data = localStorage.getItem(STORAGE_KEY);
       if (!data) {
         // Initialize with mock data if empty (First run)
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(MOCK_EQUIPMENT));
-        return MOCK_EQUIPMENT;
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(MOCK_EQUIPMENT_LIST));
+        return MOCK_EQUIPMENT_LIST;
       }
       return JSON.parse(data);
     } catch (error) {
@@ -40,7 +40,7 @@ class EquipmentService {
     await delay(SIMULATED_LATENCY_MS);
     const currentList = await this.getLocalData();
     const index = currentList.findIndex(e => e.id === equipment.id);
-    
+
     if (index === -1) {
       throw new Error(`Equipment with ID ${equipment.id} not found`);
     }
@@ -63,7 +63,7 @@ class EquipmentService {
   // Simulates uploading a file to a storage bucket (S3/Firebase Storage)
   async uploadImage(file: File): Promise<string> {
     await delay(1000); // Uploads usually take longer
-    
+
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.readAsDataURL(file);
