@@ -233,20 +233,53 @@ export const EquipmentManager: React.FC<EquipmentManagerProps> = ({
     return { total, warning, repair, broken, waiting };
   }, [equipmentList]);
 
-  const stockStats = useMemo(() => {
-    const counts: Record<string, number> = {};
-    Object.values(EquipmentType).forEach(type => {
-      counts[type] = 0;
-    });
+  // Custom Stock Counter (editable, persisted)
+  const DEFAULT_STOCK_ITEMS = [
+    { name: 'จอทีวี', count: 0 },
+    { name: 'กล่องแอนดรอยด์', count: 0 },
+    { name: 'สปริตเตอร์', count: 0 },
+    { name: 'ตัวตั้งเวลา', count: 0 },
+    { name: 'Router 4G', count: 0 },
+  ];
 
-    equipmentList.forEach(item => {
-      if (counts[item.type] !== undefined) {
-        counts[item.type]++;
-      }
-    });
+  const [stockItems, setStockItems] = useState<{ name: string; count: number }[]>(() => {
+    try {
+      const saved = localStorage.getItem('adspacenav_stock_counter_v1');
+      return saved ? JSON.parse(saved) : DEFAULT_STOCK_ITEMS;
+    } catch { return DEFAULT_STOCK_ITEMS; }
+  });
 
-    return counts;
-  }, [equipmentList]);
+  const [showAddStockItem, setShowAddStockItem] = useState(false);
+  const [newStockItemName, setNewStockItemName] = useState('');
+
+  // Save stock items to localStorage
+  useEffect(() => {
+    localStorage.setItem('adspacenav_stock_counter_v1', JSON.stringify(stockItems));
+  }, [stockItems]);
+
+  const handleStockIncrement = (index: number) => {
+    setStockItems(prev => prev.map((item, i) => i === index ? { ...item, count: item.count + 1 } : item));
+  };
+
+  const handleStockDecrement = (index: number) => {
+    setStockItems(prev => prev.map((item, i) => i === index ? { ...item, count: Math.max(0, item.count - 1) } : item));
+  };
+
+  const handleAddStockItem = () => {
+    if (!newStockItemName.trim()) return;
+    if (stockItems.some(item => item.name === newStockItemName.trim())) {
+      alert('รายการนี้มีอยู่แล้ว');
+      return;
+    }
+    setStockItems(prev => [...prev, { name: newStockItemName.trim(), count: 0 }]);
+    setNewStockItemName('');
+    setShowAddStockItem(false);
+  };
+
+  const handleRemoveStockItem = (index: number) => {
+    if (!confirm(`ต้องการลบ "${stockItems[index].name}" หรือไม่?`)) return;
+    setStockItems(prev => prev.filter((_, i) => i !== index));
+  };
 
   // Grouping by Folder (Location) - includes empty folders
   const folders = useMemo(() => {
@@ -675,9 +708,6 @@ export const EquipmentManager: React.FC<EquipmentManagerProps> = ({
             <button onClick={() => setShowSimSection(!showSimSection)} className={`${showSimSection ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-slate-700 hover:bg-slate-600'} text-white px-4 py-3 rounded-xl font-bold flex items-center gap-2 shadow-lg transition-all active:scale-95`}>
               <Smartphone size={20} /> จัดการ SIM ({simCards.length})
             </button>
-            <button onClick={startScanning} className="bg-slate-900 hover:bg-slate-800 text-white px-4 py-3 rounded-xl font-bold flex items-center gap-2 shadow-lg transition-all active:scale-95">
-              <ScanLine size={20} /> สแกน QR
-            </button>
             <button onClick={() => handleAddNew()} className="bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 shadow-lg shadow-indigo-200 transition-all active:scale-95">
               <Plus size={20} /> เพิ่มอุปกรณ์ใหม่
             </button>
@@ -700,24 +730,79 @@ export const EquipmentManager: React.FC<EquipmentManagerProps> = ({
                 <Package className="text-blue-600" size={24} />
                 <div>
                   <h2 className="font-bold text-slate-900">สรุปจำนวนสต๊อกอุปกรณ์</h2>
-                  <p className="text-xs text-slate-500">แยกตามประเภทอุปกรณ์</p>
+                  <p className="text-xs text-slate-500">แก้ไขจำนวนด้วยปุ่ม +/-</p>
                 </div>
               </div>
+              <button
+                onClick={() => setShowAddStockItem(true)}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2 shadow-lg transition-all"
+              >
+                <Plus size={18} /> เพิ่มรายการ
+              </button>
             </div>
             <div className="p-6">
-              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                {Object.values(EquipmentType).map(type => (
-                  <div key={type} className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-100">
-                    <span className="text-sm font-medium text-slate-600 truncate mr-2" title={EQUIPMENT_TYPE_LABELS[type]}>
-                      {EQUIPMENT_TYPE_LABELS[type]}
-                    </span>
-                    <span className="text-lg font-black text-slate-900 bg-white px-3 py-1 rounded-lg shadow-sm min-w-[3rem] text-center">
-                      {stockStats[type]}
-                    </span>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {stockItems.map((item, index) => (
+                  <div key={index} className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-100 group">
+                    <div className="flex items-center gap-2 flex-grow min-w-0">
+                      <span className="text-sm font-medium text-slate-700 truncate" title={item.name}>
+                        {item.name}
+                      </span>
+                      <button
+                        onClick={() => handleRemoveStockItem(index)}
+                        className="opacity-0 group-hover:opacity-100 p-1 text-red-400 hover:text-red-600 hover:bg-red-50 rounded transition-all"
+                        title="ลบรายการ"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => handleStockDecrement(index)}
+                        className="w-8 h-8 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg font-bold transition-colors flex items-center justify-center"
+                      >
+                        -
+                      </button>
+                      <span className="text-lg font-black text-slate-900 bg-white px-3 py-1 rounded-lg shadow-sm min-w-[3rem] text-center border border-slate-100">
+                        {item.count}
+                      </span>
+                      <button
+                        onClick={() => handleStockIncrement(index)}
+                        className="w-8 h-8 bg-blue-500 hover:bg-blue-600 text-white rounded-lg font-bold transition-colors flex items-center justify-center"
+                      >
+                        +
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
             </div>
+
+            {/* Add Stock Item Modal */}
+            {showAddStockItem && (
+              <div className="fixed inset-0 z-[5000] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+                <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 animate-slideUp">
+                  <h3 className="text-lg font-bold text-slate-900 mb-4">เพิ่มรายการสต๊อกใหม่</h3>
+                  <input
+                    type="text"
+                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-blue-500 text-slate-900 font-medium mb-4"
+                    placeholder="ชื่อรายการ เช่น สาย HDMI"
+                    value={newStockItemName}
+                    onChange={e => setNewStockItemName(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && handleAddStockItem()}
+                    autoFocus
+                  />
+                  <div className="flex justify-end gap-3">
+                    <button onClick={() => { setShowAddStockItem(false); setNewStockItemName(''); }} className="px-4 py-2 text-slate-500 font-bold hover:bg-slate-100 rounded-xl transition-colors">
+                      ยกเลิก
+                    </button>
+                    <button onClick={handleAddStockItem} className="px-6 py-2 bg-blue-600 text-white font-bold rounded-xl shadow-lg hover:bg-blue-700 transition-colors">
+                      เพิ่ม
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -1647,9 +1732,9 @@ export const EquipmentManager: React.FC<EquipmentManagerProps> = ({
                         </div>
                       </div>
                       <div className={`text-xs font-bold px-2 py-1 rounded-lg whitespace-nowrap ml-2 flex flex-col items-end ${item.noWarranty ? 'bg-amber-50 text-amber-600' :
-                          w?.status === 'EXPIRED' ? 'bg-red-50 text-red-600' :
-                            w?.status === 'WARNING' ? 'bg-amber-50 text-amber-600' :
-                              'bg-emerald-50 text-emerald-600'
+                        w?.status === 'EXPIRED' ? 'bg-red-50 text-red-600' :
+                          w?.status === 'WARNING' ? 'bg-amber-50 text-amber-600' :
+                            'bg-emerald-50 text-emerald-600'
                         }`}>
                         <span>{installDate}</span>
                       </div>
